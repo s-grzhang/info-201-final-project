@@ -1,0 +1,267 @@
+---
+title: "Final Group Project"
+author: "Grace Zhang, Sophy Peng, Shubham Bhadra"
+date: "2026-11-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load-data}
+library(tidyverse)
+library(readxl)
+msa_data <- read_excel("oesm24ma/MSA_M2024_dl.xlsx")
+```
+
+# Project Milestone 3
+## I. Data Documentation
+
+### Data Source
+Our dataset is the May 2024 Metropolitan and Non metropolitan Area tables from the Occupational Employment and Wage Statistics (OEWS) program, published by the U.S. Bureau of Labor Statistics (BLS). The data can be downloaded from the BLS OEWS tables page: https://www.bls.gov/oes/tables.htm (file: `oesm24ma.zip`).
+
+The data was collected by the BLS, an agency of the U.S. Department of Labor, in partnership with State Workforce Agencies. The OEWS survey is mailed to a sample of non farm business establishments, which report the number of employees in each occupation and their wages.
+
+We consider the source reliable. The BLS is the federal government's main statistical agency for labor economics, and policymakers, workforce programs, and employers use its data to make wage decisions. The survey has a large sample, has a published methodology, and reports relative standard errors alongside its estimates. BLS suppresses any estimate that doesn't meet its reliability or confidentiality standards instead of publishing it.
+
+We know this is a real dataset because anyone can download it from an official .gov website and the BLS OEWS technical notes document it in full.
+
+### Data Meaning
+
+This data set shows employment and wages by occupation across U.S. metropolitan and nonmetropolitan areas as of May 2024. Each row is the estimate for one occupation in one geographic area.
+
+### Data Observations
+
+The dataset has `r nrow(msa_data)` rows and `r ncol(msa_data)` columns. The columns identify the area and occupation, then give employment counts, hourly and annual wage means, medians, and percentiles, and the relative standard errors for those estimates. The code below prints the column names and five randomly chosen rows.
+
+```{r}
+names(msa_data)
+slice_sample(msa_data, n = 5)
+```
+
+### Data Issues
+
+```{r}
+msa_issues <- msa_data
+names(msa_issues) <- tolower(names(msa_issues))
+
+# Count how many cells in each column hold BLS suppression/top-code symbols
+# (**, *, #), plus other missing values, so we can report the data issues below.
+count_sym <- function(x, sym){
+  sum(x == sym, na.rm = TRUE)
+}
+
+n_emp_supp <- count_sym(msa_issues$tot_emp, "**")
+n_wage_supp <- count_sym(msa_issues$a_mean, "*") + count_sym(msa_issues$a_mean, "**")
+n_median_supp <- count_sym(msa_issues$a_median, "*") + count_sym(msa_issues$a_median, "**")
+n_top_coded <- sum(msa_issues[, c("a_pct75", "a_pct90", "a_median")] == "#", na.rm = TRUE)
+n_hourly_na <- sum(msa_issues$hourly == TRUE | msa_issues$annual == TRUE, na.rm = TRUE)
+n_true_na <- sum(is.na(msa_issues[, c("tot_emp", "a_mean", "a_median")]))
+group_counts <- table(msa_issues$o_group)
+```
+
+Several issues affect the employment and wage variables. The first are the suppressed estimates which result from an estimate failing BLS reliability standards or having the potential to reveal a specific employer. BLS replaces the value with symbol. Employment is suppressed (`**`) in `r n_emp_supp` rows. The annual mean wage is suppressed (`*` or `**`) in `r n_wage_supp` rows, and the annual median wage in `r n_median_supp` rows. Most of these are small occupations and small or rural areas, where few establishments were surveyed. Another source issue is the inclusion of top-coded wages, or when a wage that exceeds the cap are replaced by the upper bound. BLS reports wages of $239,200 per year ($115.00 per hour) or more as `#` instead of an exact value. This happens `r n_top_coded` times across the median, 75th percentile, and 90th percentile wage columns. The workers behind these values earn at least that much, so the data understates the pay of the highest earners, such as physicians and executives. The symbols above and the commas in large numbers make R read the numeric columns as text. We have to clean them before analysis, or we could lose valid values along with the symbols.
+
+Some values are missing on purpose. For example, teachers and airline pilots, do not work a standard 2,080-hour year, so BLS reports only their annual wages and leaves out hourly wages. This affects `r n_hourly_na` rows. It's not an error, but these values show up as missing once the columns are converted to numbers, and the main employment and wage columns also have `r n_true_na` blank values. The file also mixes rows at different levels of detail (`r paste(names(group_counts), group_counts, sep = ": ", collapse = ", ")`), so summing employment without filtering to one level would count workers more than once. We found no implausible values, such as negative employment or wages. Every number is still a survey estimate with sampling error, which BLS reports in the relative standard error columns (`emp_prse` and `mean_prse`).
+
+BLS documents all of these issues, and suppressing weak estimates is itself quality control, so the source stays reliable. The data is still less complete and less precise for rural areas, small occupations, and the highest earners. Conclusions about those groups will be weaker than conclusions about large occupations in major metropolitan areas.
+
+## II. Data Ethics
+
+Our data set reports only occupation and area averages, with no race, gender, age, education, or experience. Because these features are missing, we cannot examine pay gaps between groups, and any conclusion about fairness and non-discrimination would be a guess. The data also leaves out self-employed and farm workers, and suppression and top-coding hide small rural areas and the highest earners, so results favor large metropolitan areas and common occupations.
+
+The data reflects several principles. Privacy is protected because BLS suppresses estimates that could identify an employer, and with no personal data, safety and security risks are low. Transparency and explainability come from BLS’s published methodology and our documented cleaning choices. For accountability and professional responsibility, we will report that wages are uncertain estimates and not present them as exact. People, not automated decisions, interpret our results, which keeps human control in place. To promote human values, we will use the findings to understand wage patterns, not to judge individuals.
+
+## III. Data Wrangling
+
+### Loading Data
+
+```{r}
+head(msa_data)
+```
+
+```{r}
+nrow(msa_data)
+colnames(msa_data)
+```
+
+### 1. Clean a column of data
+
+Checking the A_MEDIAN column to see if it's text and how many placeholder values (* and #) it contains.
+
+```{r}
+class(msa_data$A_MEDIAN)
+sum(msa_data$A_MEDIAN == "*")
+sum(msa_data$A_MEDIAN == "#")
+```
+
+Cleaning the A_MEDIAN column by removing rows with placeholder symbols (* and #) and converting the column from text to numbers, then checking that it is now numeric and how many rows remain.
+
+```{r}
+msa_dataClean <- msa_data |> 
+  filter(A_MEDIAN != "*", A_MEDIAN != "#") |> 
+  mutate(A_MEDIAN = as.numeric(A_MEDIAN))
+class(msa_dataClean$A_MEDIAN)
+nrow(msa_dataClean)
+```
+
+This removed 2,591 rows, leaving 147,585.
+
+The A_MEDIAN column was stored as text instead of numbers because BLS uses * (data not available) and # (wage capped at $239,200 or more) in place of some values. I used class() and sum() to confirm this, then removed those rows with filter() and converted the column to numeric with as.numeric() so I could do calculations on it.
+
+### 2. Create a new categorical column
+
+```{r}
+msa_dataClean <- msa_dataClean |> 
+  mutate(wage_tier = if_else(A_MEDIAN < 50000, "Low", "High"))
+msa_dataClean |> 
+  sample_n(5)
+count(msa_dataClean, wage_tier)
+```
+
+I created a new categorical column, wage_tier, using mutate() and if_else(). Occupations with a median annual wage under $50,000 are labeled "Low" and all others are labeled "High." This resulted in 65,305 occupations labeled "Low" and 82,280 labeled "High." This makes it easier to compare how many jobs fall into each pay group.
+
+### 3. Create a summary data frame
+
+```{r}
+state_summary <- msa_dataClean |> 
+  filter(O_GROUP == "detailed") |>
+  group_by(PRIM_STATE) |>
+  summarize(num_records = n(),
+            median_wage = median(A_MEDIAN)) |>
+  arrange(desc(median_wage))
+head(state_summary, 10)
+```
+
+I created a summary data frame, state_summary, using group_by() and summarize(). After keeping only detailed occupations, I grouped the data by state and calculated the number of records and the median of the median annual wages for each state, then sorted from highest to lowest. This makes it easy to compare pay levels across states.
+
+Washington, DC had the highest median wage ($68,970), followed by Massachusetts ($64,390) and Connecticut ($64,260).
+
+## IV. Data Methods
+
+* How did you clean your data? Explain all of the data processing choices you made.
+
+The data set for May 2024 OEWS metro area has 150,176 rows and 32 columns. The variable A_MEDIAN contains information about annual median wages, which was in text format since the Bureau of Labor Statistics uses characters * and # to describe numbers. We removed 2,591 rows which had those characters to have 147,585 rows remaining. Then, we made a wage_tier column to show rows that had wages under \$50,000. We called those rows Low, and we called the rows which are \$50,000 or more High. Finally, when creating the state summary, we kept only detailed occupations so totals weren't counted twice, and we summarized the annual median wages for each state.
+
+* What technical decisions did you make, such as whether to remove missing values or replace them?
+
+We decided to remove missing values instead of simply replacing them. If we decided to fill in the missing values with a number, it would have been a guess. The * symbol means BLS didn't publish a wage. The # symbol represents wages greater than $239,200, and we removed these as well. We decided to not use the mean in our summary and used the median because the median is more representative in this data set, considering how it doesn't get affected by the few very high wages.
+
+* Which variables were relevant for addressing each research question?
+
+A_MEDIAN was relevant because we used it for every wage comparison. PRIM_STATE was used for comparing regions. O_GROUP helps us figure out detailed occupations. wage_tier counted the number of occupation records in each pay group. For the future, we'll use OCC_CODE, TOT_EMP, and LOC_QUOTIENT, but we haven't cleaned these yet.
+
+* What challenges and/or limitations did you encounter when performing your data manipulation?
+
+One challenge we encountered was that the wage column looks like numbers, but it's stored as text. We're not able to do the math unless we remove the symbols. That's why we removed 1,063 rows of the highest-paid jobs, which contain the # symbol. Each row is one job in one metro area. It's not one worker, so small and large jobs have the same impact on the overall state median.
+
+## V. Group Collaboration
+
+![](/Users/sophypeng/Downloads/IMG_2280.PNG)
+
+
+# Milestone 04
+
+# 1. Data Join
+## 1.1 Find a Second Dataset
+```{r}
+marpp <- read_csv("MARPP/MARPP_MSA_2008_2024.csv")
+```
+
+## 1.2
+### Data Source
+The data was downloaded from https://apps.bea.gov/regional/downloadzip.htm (category: Personal income (state and local), table MARPP). The Bureau of Economic Analysis (BEA), a federal statistical agency in the U.S. Department of Commerce collected the data. The data is reliable because it's published by a nonpartisan government agency that produces official U.S. economic statistics, including GDP. It publishes its methodology openly and updates the data every year. Economists, journalists, and government agencies use RPPs to compare the cost of living across regions. The dataset is publicly available on BEA's official .gov website. It has a documented table ID (MARPP), and each row has a standard federal GeoFIPS code identifying a real metropolitan area. The values can be checked against BEA's annual "Real Personal Income for States and Metropolitan Areas" news release.
+
+### Data Meaning
+The data measures the differences in price levels across metropolitan areas for a given year, expressed as a percentage of the overall national price level. An RPP of 100 is the national average.
+
+This is relevant to our first data set because OEWS only reports nominal wages. With RPPs, we can adjust each metro's wages for local prices and compare what workers in the same occupation can actually afford in different places.
+
+### Data Join
+```{r}
+bls_areas <- msa_data %>%
+  distinct(AREA, AREA_TITLE)
+marpp_codes <- marpp %>% filter(LineCode == 1) %>% pull(GeoFIPS)
+n_match <- sum(bls_areas$AREA %in% marpp_codes)
+```
+We'll join on the metro area code. BEA's `GeoFIPS` column and the `AREA` column in OEWS both use the same 5-digit OMB codes for metropolitan statistical areas, so we don't have to match on names. We also need to line up the year. OEWS is from May 2024, so we'll use the `2024` column from the RPP data.
+
+A few things need to change before the join:
+
+- Drop the 4 note rows at the bottom of the CSV.
+- Each metro has 5 rows, one per price category, so we'll keep only `LineCode == 1` (all items) or pivot the categories into their own columns.
+- Drop the United States (00000) and nonmetropolitan portion (00999) rows, since they aren't metros.
+- Drop BEA's name to avoid redundant name columns
+- Drop all year columns other than 2024
+
+### Data Observations
+```{r}
+names(marpp)
+nrow(marpp)
+glimpse(marpp)
+slice_sample(marpp, n=5)
+```
+The file has `r nrow(marpp)` rows and `r ncol(marpp)` columns, but the last 4 rows are notes from BEA, not data. That leaves 1,945 data rows consisting of 389 areas (387 metros, the U.S., and the nonmetropolitan portion) times 5 price categories. The first 8 columns describe each row. `GeoFIPS` is the area code, `GeoName` is the area name, and `LineCode` and `Description` say which price category the row is for (e.g. 1 = "RPPs: All items", 3 = "RPPs: Services: Housing"). `Region`, `TableName`, `IndustryClassification`, and `Unit` are the same for every row. The other 17 columns, `2008` through `2024`, hold the RPP for each year, so the data is in wide format with one column per year.
+
+### Data Issues
+```{r}
+years <- as.character(2008:2024)
+n_text_cols <- sum(sapply(marpp[years], is.character))
+marpp_clean <- marpp %>%
+  filter(!is.na(LineCode)) %>%
+  mutate(across(all_of(years), ~ suppressWarnings(as.numeric(.x))))
+n_na_cells <- sum(is.na(marpp_clean[years]))
+n_na_2024 <- sum(is.na(marpp_clean$`2024`))
+n_region_na <- sum(is.na(marpp_clean$Region))
+marpp_clean %>%
+  filter(if_any(all_of(years), is.na)) %>%
+  distinct(GeoName)
+marpp_clean %>%
+  group_by(Description) %>%
+  summarise(min_2024 = min(`2024`), max_2024 = max(`2024`))
+```
+The biggest issue is that BEA writes missing values as the text "(NA)". Because of that, R reads `r n_text_cols` of the year columns (2008 to 2015) as text instead of numbers. After converting them, there are `r n_na_cells` missing values. They all come from 3 metros that don't have data for the whole period: Enid, OK (before 2013), Twin Falls, ID (before 2015), and Kiryas Joel-Poughkeepsie-Newburgh, NY (before 2016). BEA explains this in the footnotes file. There are `r n_na_2024` missing values in 2024, so this doesn't affect our join.
+
+The rest are formatting problems. The 4 note rows at the bottom get read in as rows that are almost all NA, which is why `read_csv()` gives a parsing warning. `Region` is empty in all `r n_region_na` data rows, and `TableName`, `IndustryClassification`, and `Unit` are the same in every row, so they don't tell us anything. Some names also have a "*" footnote marker attached.
+
+We didn't find any implausible values. The 2024 all-items RPP goes from about 84 to 116, which is reasonable for U.S. metros. Housing has a much wider spread (about 42 to 212), but that's expected because rent varies a lot more between cities than the price of goods does.
+
+Overall, these issues don't hurt the reliability of the source. The missing values are documented and only affect early years for 3 metros, and everything else is cleanup we can do in R.
+
+## 1.3 Join
+
+```{r}
+marpp_2024 <- marpp_clean %>%
+  filter(LineCode == 1, !GeoFIPS %in% c("00000", "00999")) %>%
+  select(GeoFIPS, rpp_2024 = `2024`)
+
+joined <- msa_dataClean %>%
+  inner_join(marpp_2024, by = c("AREA" = "GeoFIPS"))
+```
+
+Changes we made to get the two data sets ready to join:
+
+- Removed BEA's 4 note rows at the bottom of the file
+- Kept only the all-items RPP, so each metro has one row instead of five
+- Took out the U.S. and nonmetropolitan rows since they aren't metros
+- Kept only the 2024 RPP to match the May 2024 OEWS data, and dropped BEA's name column
+- Joined on the metro code and used an inner join, which drops the `r n_distinct(msa_dataClean$AREA) - n_distinct(joined$AREA)` Puerto Rico metros that BEA doesn't cover
+
+```{r}
+names(joined)
+nrow(joined)
+glimpse(joined)
+```
+
+The joined data set has `r nrow(joined)` rows and `r ncol(joined)` columns covering `r n_distinct(joined$AREA)` metros. It has every column from the cleaned OEWS data, plus `wage_tier` from Milestone 3 and the new column, `rpp_2024`. Each row is still one occupation in one metro. Every occupation in a metro gets the same RPP, so a metro's RPP is repeated across all of its rows.
+
+```{r}
+joined %>%
+  filter(OCC_TITLE == "Registered Nurses") %>%
+  select(AREA_TITLE, A_MEDIAN, rpp_2024) %>%
+  arrange(desc(A_MEDIAN)) %>%
+  head(5)
+```
+
+For example, the table above shows the 5 metros with the highest median pay for registered nurses, next to each metro's RPP.
