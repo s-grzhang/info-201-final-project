@@ -265,3 +265,61 @@ joined %>%
 ```
 
 For example, the table above shows the 5 metros with the highest median pay for registered nurses, next to each metro's RPP.
+
+
+## II. Research questions
+
+### Question 4: How does a metro area's tech employment share relate to its wage inequality?
+
+We calculate each metro area's share of employment in tech occupations and its employment-weighted 90th-to-10th percentile wage ratio from the merged dataset.
+
+```{r}
+metro_inequality <- joined |>
+  filter(O_GROUP == "detailed") |>
+  mutate(
+    TOT_EMP = as.numeric(na_if(TOT_EMP, "**")),
+    A_PCT10 = as.numeric(na_if(na_if(A_PCT10, "*"), "#")),
+    A_PCT90 = as.numeric(na_if(na_if(A_PCT90, "*"), "#")),
+    is_tech = str_starts(OCC_CODE, "15-")
+  ) |>
+  group_by(AREA, AREA_TITLE) |>
+  summarize(
+    total_emp = sum(TOT_EMP, na.rm = TRUE),
+    tech_emp = sum(TOT_EMP[is_tech], na.rm = TRUE),
+    tech_share = (tech_emp / total_emp) * 100,
+    p90_p10_ratio = weighted.mean(A_PCT90, TOT_EMP, na.rm = TRUE) /
+      weighted.mean(A_PCT10, TOT_EMP, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  filter(!is.na(tech_share), !is.na(p90_p10_ratio), total_emp > 0)
+```
+
+We plot each metro's tech employment share against its 90th-to-10th percentile wage ratio with a linear trend line to evaluate how wage inequality changes alongside tech concentration.
+
+```{r}
+ggplot(metro_inequality, aes(x = tech_share, y = p90_p10_ratio)) +
+  geom_point(alpha = 0.6, color = "steelblue") +
+  geom_smooth(method = "lm", formula = y ~ x, color = "darkred", se = TRUE) +
+  labs(
+    title = "Metro Tech Employment Share vs. Wage Inequality (May 2024)",
+    subtitle = "Employment-weighted 90th-to-10th percentile annual wage ratio across U.S. metros",
+    x = "Tech Share of Total Metro Employment (%)",
+    y = "90th-to-10th Percentile Wage Ratio"
+  ) +
+  theme_minimal()
+```
+
+This visualization helps answer the question by showing that across U.S. metropolitan areas, a higher share of tech employment corresponds to only a modest upward slope in the 90th-to-10th percentile wage ratio while individual metros vary widely around the trend. Most metro areas cluster below a 2% tech share with wage ratios spanning roughly 1.75 to nearly 2.20, and the wider confidence band at higher tech shares reflects fewer high-concentration metros.
+
+## III. Code notes
+
+
+
+
+
+
+## IV. Summary Conclusion & Takeaways
+
+Putting the May 2024 BLS OEWS metro data together with the 2024 BEA Regional Price Parities gives us a clearer picture of how local pay, cost of living, and wage gaps line up across U.S. metro areas. One big takeaway from our join is that high nominal pay doesn't always mean high buying power—for instance, looking at top-paying metros for registered nurses alongside `rpp_2024` shows that local price levels vary a lot compared to the national average of 100. A second takeaway is that cleaning the BEA data before joining—dropping the bottom note rows, keeping `LineCode == 1`, filtering out non-metro codes (`00000` and `00999`), and turning text `"(NA)"` values into numbers—lets us match on metro codes and 2024 cleanly without losing 2024 RPP values. Third, comparing a metro's tech employment share (`OCC_CODE` starting with `"15-"`) against its employment-weighted 90th-to-10th percentile wage ratio only shows a slight upward slope, with most metros under a 2% tech share and plenty of spread in wage inequality either way. Overall, this helps answer our bigger questions by showing that while tech share and local prices matter, metros with similar tech shares can still look pretty different in terms of wage inequality and affordability.
+
+We think our analysis probably underestimates wage inequality and geographic coverage in a few ways. Turning suppressed or coded OEWS entries (`"**"`, `"*"`, `"#"`) into `NA` and dropping rows with missing shares or ratios cuts out some occupation records, using an inner join leaves out metros without BEA RPP numbers (like Puerto Rico metros), and weighting by metro employment can smooth out sharper gaps in smaller occupations. Next, we'd like to adjust wages directly by `rpp_2024` (or housing RPPs) to compare cost-of-living-adjusted pay, look at different occupation groups separately, and check multi-year RPP changes to see how affordability shifts over time.
